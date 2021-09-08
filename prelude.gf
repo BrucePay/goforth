@@ -5,19 +5,29 @@
 ####################################################################
 
 
+DEFINE ansi:black  == "\e[30m";
+DEFINE ansi:red    == "\e[31m";
+DEFINE ansi:green  == "\e[32m";
+DEFINE ansi:yellow == "\e[33m";
+DEFINE ansi:blue   == "\e[34m";
+DEFINE ansi:purple == "\e[35m";
+DEFINE ansi:cyan   == "\e[36m";
+DEFINE ansi:white  == "\e[37m";
+
 ############################################################
 #
 # Screen control functions
 #
 DEFINE cls            == "\e[H\e[0J" print;
 DEFINE console:home   == "\e[H" print;
-DEFINE console:red    == "\e[31m" print;
-DEFINE console:green  == "\e[32m" print;
-DEFINE console:yellow == "\e[33m" print;
-DEFINE console:blue   == "\e[34m" print;
-DEFINE console:purple == "\e[35m" print;
-DEFINE console:cyan   == "\e[36m" print;
-DEFINE console:white  == "\e[37m" print;
+DEFINE console:red    == ansi:red print;
+DEFINE console:green  == ansi:green print;
+DEFINE console:yellow == ansi:yellow print;
+DEFINE console:blue   == ansi:blue print;
+DEFINE console:purple == ansi:purple print;
+DEFINE console:cyan   == ansi:cyan print;
+DEFINE console:white  == ansi:white print;
+DEFINE console:black  == ansi:black print;
 DEFINE console:reset  == "\e[0m" print;
 
 
@@ -26,18 +36,6 @@ DEFINE console:reset  == "\e[0m" print;
 # Function to print a carriage return
 #
 DEFINE cr == "" .;
-
-############################################################
-#
-# Return the predecessor of a value
-#
-DEFINE pred == 1 -;
-
-############################################################
-#
-# Return the successor of a value
-#
-DEFINE succ == 1 +;
 
 ############################################################
 #
@@ -59,18 +57,10 @@ DEFINE hill ==
 #
 # Define a function to compute the execution duration of a lambda
 #
-DEFINE duration ==
-    datetime !_start_time
+DEFINE duration : start_time ==
+    datetime -> start_time
     &
-    "Duration " $_start_time since + .cyan
-;
-
-DEFINE duration/2 ==
-    datetime -> _start_time
-    {dup -> iters} dip
-    repeat
-
-    "Duration " $_start_time since  + $iters / .cyan
+    "Duration " start_time since + .cyan
 ;
 
 ############################################################
@@ -78,21 +68,18 @@ DEFINE duration/2 ==
 # Define the zip function (uses variables).
 # array1 array2 -> resultArray
 #
-DEFINE zip ==
-       -> _prog                         # save the zip program
-    [] -> _result                       # initialize the result vector
-    {dup2 {empty?} apply2 or not?}      # make sure neither array is empty
+DEFINE zip l1 l2 prog : r x y result ==
+    [] -> result                    # initialize the result vector
+    {l1 empty? l2 empty? or not?} # make sure neither array is empty
     {
-        {uncons swap} apply2            # get the head of each collection
-        rol rol swap                    # move the heads to the TOS
-        $_prog &                        # apply the specified program
-        $_result swap + -> _result      # add the result to the result list
+        l1 uncons -> l1 -> x        # get the head of each collection
+        l2 uncons -> l2 -> y
+        x y prog &  -> r            # apply the specified program
+        result r + -> result        # add the result to the result list
     }
     while
-    pop                                 # pop the empty arrays
-    pop
-    $_result                            # and return the result
-    nil -> _result
+    result                          # and return the result
+    nil -> result
 ;
 
 ############################################################
@@ -124,7 +111,7 @@ DEFINE rreverse2 ==
 #
 DEFINE nrev ==
     [] swap
-    $dup
+    {dup}
     {uncons {swap cons} dip}
     while
     pop
@@ -156,12 +143,12 @@ DEFINE boom ==
 
 ############################################################
 #
-# Define a recursive Fibonacci function
+# Define a recursive point-free Fibonacci function
 #
-DEFINE fib ==
-    dup 2 <                         # if less than 2
-    { pop 1 }                       # pop the arg and return 1
-    {dup 1 - fib swap 2 - fib +}    # otherwise compute fib(n-1) + fib(n-2)
+DEFINE fib n ==
+    n 2 <                    # if less than 2
+    {1}                      # return 1
+    {n pred fib n 2 - fib +}  # otherwise compute fib(n-1) + fib(n-2)
     ifte
 ;
 
@@ -172,7 +159,7 @@ DEFINE fib ==
 DEFINE bfib ==
     {2 <}                         # if less than 2
     {pop 1}                       # pop the arg and return 1
-    {1 - dup 1 -}                 # otherwise recurse with n-1 and n-2
+    {pred dup pred}                 # otherwise recurse with n-1 and n-2
     {+}                           # sum the results
     binrec
 ;
@@ -181,18 +168,17 @@ DEFINE bfib ==
 #
 # Define an iterative Fibonacci function (uses variables)
 #
-DEFINE ifib ==
-    -> num                            # capture the number of iterations
-    0 -> current                      # initialize current and next
+DEFINE ifib num : current next ==
+    0 -> current
     1 -> next
-    {$num}                          # while the number is not zero
+    {num}                          # while the number is not zero
     {
-        $next $next $current +      # compute the new current and next values
+        next next current +        # compute the new current and next values
             -> next -> current    
-        $num 1 - -> num
+        num pred -> num
     }
     while
-    $next                           # return the final result
+    next                           # return the final result
 ;
 
 ############################################################
@@ -201,7 +187,7 @@ DEFINE ifib ==
 #
 DEFINE pfib ==
     [0 1]                               # initialize the sequence [curr next]
-    {{1 -} dip over}                    # check remaining iteration
+    {{pred} dip over}                    # check remaining iteration
     {dup 1 @ swap first over + append}  # update the sequence [next curr+next]
     while
     swap pop last                       # get rid of the count and return
@@ -240,21 +226,28 @@ DEFINE qsort ==
 #
 DEFINE bqsort ==
     {small}                         # if the list is small
-        {}                          # just return it
+    {}                              # just return it
     {uncons {over <} list:split}    # otherwise split into pivot, smaller and larger and recurse
-        {swapd cons append}         # recombine the elements in order
+    {swapd cons append}             # recombine the elements in order
     binrec
 ;
 
 ############################################################
 #
-# Fizbuz implementation using the 'case' operator
+# Define the zero? predicate - returns true if the argument is zero
 #
-DEFINE fizbuz == [
-        {15 % 0 ==} "fizbuz"
-        {3 % 0 ==}  "fiz"
-        {5 % 0 ==}  "buz"
-        {pop true}  {}
+DEFINE zero? == 0 ==;
+
+############################################################
+#
+# Fizbuz implementation using the 'case' function
+#
+DEFINE fizbuz ==
+    [
+        {15 % zero?} "fizbuz"
+        {3  % zero?} "fiz"
+        {5  % zero?} "buz"
+        {pop true}   {}
     ]
     case
 ;
@@ -263,15 +256,14 @@ DEFINE fizbuz == [
 #
 # Print a binary tree where nodes are lists of three items e.g. [val left right]
 #
-DEFINE ptree == [
-        nil {pop}
-        {true!} {
-            dup 0 @ .yellow
-            dup 1 @ ptree
-            2 @ ptree
-        }
-    ]
-    case
+DEFINE ptree tree ==
+    tree notempty?          # if the tree isn't empty
+    {
+       tree 0 @ .yellow     # print the value (1st element)
+       tree 1 @ ptree       # recurse and print the left tree
+       tree 2 @ ptree       # recurse print the right tree
+    }
+    if
 ;
 
 ############################################################
@@ -329,7 +321,7 @@ DEFINE list:average == {list:sum} {len} cleave /;
 DEFINE list:flatten ==
     {empty?}                        # if the list is empty, return []
     {}
-    {uncons swap list:flatten swap} # otherwise flatten the list one at a time recursively
+    {uncons swap dup list? {list:flatten} if swap} # otherwise flatten the list one at a time recursively
     {append}
     linrec
 ;
@@ -338,16 +330,16 @@ DEFINE list:flatten ==
 #
 # Return all of the primes up to a specific number
 #
-DEFINE primes ==
+DEFINE primes : r v ==
     [] -> r                     # initialize the result collection variable
     3 swap 2 ...                # generate 3, 5, 7, ... n
-    {dup notempty?}           # while the list is not empty
+    {dup notempty?}             # while the list is not empty
     {
-        uncons swap dup $r swap + -> r -> v {$v % true?} filter
+        uncons swap dup r swap + -> r -> v {v % true?} filter
     }
     while
     pop
-    $r
+    r
 ;
 
 ############################################################
@@ -375,15 +367,39 @@ DEFINE help ==
     ops keys                            # get the names of all of the defined operations
         sort                            # sort the names
             6 list:split                # split into groups of 6
-                {
-                    {20 str:padright}   # pad each field in the group
-                    map 
-                        str:join .      # join the group into a string and print it
-                }
-                each
+            {
+                {20 str:padright} map   # pad each field in the group
+                str:join .              # join the group into a string and print it
+            }
+            each
     console:reset
 ;
 
+############################################################
+#
+# Print out detailed help for all of the currently defined words
+#
+DEFINE help:detailed : helpComments helpMap key ==
+    "" -> helpComments
+    [] dict! -> helpMap
+    "goforth.go" file:readlines
+        {
+            [
+                r/ *\/\/C/ {
+                    4 skip helpComments swap + "\n" + -> helpComments
+                }
+                r/ops.".*= / {
+                    r/^.*ops."([^"]+)".*$/ "$1" str:replace
+                        r/^[ \t\r\n]+/ "" str:replace -> key
+                    helpMap key helpComments !
+                    "" -> helpComments
+                }
+            ] case
+         }
+         each
+    "==================== Help ==============================" .green
+    helpMap keys sort {dup .green helpMap swap @ .yellow} each
+;
 
 ############################################################
 #
@@ -412,6 +428,5 @@ DEFINE gcd2 ==
     {}              # end block is a noop in this case
     linrec
 ;
-
 
 

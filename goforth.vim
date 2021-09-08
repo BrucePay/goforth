@@ -1,5 +1,5 @@
 " Vim syntax file
-" Language:           GoForth (a contatenative language written ig Go; after Joy
+" Language:           GoForth (a contatenative language written in Go; heavily influenced by Joy
 " Maintainer:         Bruce Payette
 " Version:            0.1
 " Project Repository: https://github.com/brucepay
@@ -19,8 +19,8 @@ endif
 " Operators contain dashes
 setlocal iskeyword+=-
 
-" Braid doesn't care about case
-syn case ignore
+" Braid does't care about case
+" syn case ignore
 
 " Sync-ing method
 syn sync minlines=100
@@ -33,7 +33,7 @@ syn keyword braidCommentTodo  TODO FIXME XXX TBD HACK NOTE BUGBUG BUGBUGBUG cont
 syn match braidComment        /(;.*;)\|#.*/ contains=goforthCommentTodo,goforthCommentDoc,@Spell
 
 " Language keywords and elements
-syn keyword goforthKeyword     DEFINE if ifte while map reduce case primrec linrec binrec dip
+syn keyword goforthKeyword     DEFINE == if ifte while map each reduce repeat case primrec linrec binrec dip
 
 syn keyword goforthConstant    true false null nil _  IsLinux IsMacOS IsWindows IsCoreCLR IsUnix tid 
 
@@ -101,11 +101,11 @@ syn match goforthConstant       /\nil\>/
 
 " Folding blocks
 if !exists('g:goforth_nofold_blocks')
-	syn region goforthBlock start=/(/ end=/)/ transparent fold
+	syn region goforthBlock start=/{/ end=/}/ transparent fold
 endif
 
 if !exists('g:goforth_nofold_region')
-	syn region goforthRegion start=/;region/ end=/;endregion/ transparent fold keepend extend
+	syn region goforthRegion start=/#region/ end=/#endregion/ transparent fold keepend extend
 endif
 
 " Setup default color highlighting

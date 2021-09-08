@@ -4,25 +4,22 @@
 #
 ######################################################################################
 
-DEFINE node:new ==
+DEFINE node:new : this ==
     [] dict! -> this
-    $this swap :right swap ! 
-    $this swap :left swap ! 
-    $this swap :value swap !
-    $this
+    this swap :right swap ! 
+    this swap :left swap ! 
+    this swap :value swap !
+    this
 ;
 
-DEFINE node:print ==
-    dup
+DEFINE node:print n ==
+    n
     {
-        dup :left  @ node:print
-        dup :right @ node:print
-            :value @ .
+        n :left  @ node:print
+        n :right @ node:print
+        n :value @ .
     }
-    {
-        pop
-    }
-    ifte
+    if
 ;
 
 # Create and print a tree

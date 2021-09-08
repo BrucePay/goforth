@@ -55,7 +55,17 @@ func (s *Stack) Tos() interface{} {
 	return s.Value[s.index-1]
 }
 
-// Pop an item off the stack
+func (s *Stack) SetTos(val interface{}) {
+	if s.index == 0 {
+		s.Value[0] = val
+		s.index = 1
+		return
+	}
+	s.Value[s.index-1] = val
+}
+
+// Pop an item off the stack. This method takes an id string the will be used
+// to provide context in error messages.
 func (s *Stack) Pop(id string) interface{} {
 	var r interface{}
 	if s.index == 0 {
@@ -75,19 +85,24 @@ func (s *Stack) Pop(id string) interface{} {
 // Print the contents of the stack non-destructively
 func (s *Stack) Print() {
 	if s.index > -1 {
-		fmt.Println("Stack:")
+		fmt.Println(colorYellow + "Stack:")
 		i := s.index
 
 		count := 0
 		for i > 0 && count < 6 {
 			i--
 			count++
-			fmt.Printf(colorYellow+"%d: %v\n", s.index-i-1, s.Value[i])
+			val := fmt.Sprintf("%v", s.Value[i])
+			if len(val) > 80 {
+				val = string(val[0:80]) + "..."
+			}
+			fmt.Printf("%d: %s\n", s.index-i-1, val)
 		}
+		fmt.Printf(colorReset)
 	}
 }
 
-// Reset the stack state
+// Reset the stack's state
 func (s *Stack) Reset() {
 	s.index = 0
 	for i := 0; i < len(s.Value); i++ {
@@ -176,6 +191,7 @@ var lineno int = 1
 
 var currentFile = "<stdin>"
 
+/*------------------------------------------------------------*/
 //
 // ParseLine parses a string into tokens which will then be compiled into a GoForth lambda
 //
@@ -327,7 +343,7 @@ func ParseLine(text string) []Token {
 
 		if chr == ' ' || chr == '\r' || chr == '\n' || chr == '\t' {
 			if len(strtemp) > 0 {
-				if strtemp[0] == ':' {
+				if len(strtemp) > 1 && strtemp[0] == ':' {
 					// Turn :foobar into "foobar"
 					strtemp = "\"" + string(strtemp[1:]) + "\""
 				}
@@ -456,8 +472,39 @@ func ParseLine(text string) []Token {
 	return result
 }
 
+/*------------------------------------------------------------*/
+
+type Scope struct {
+	Parent    *Scope
+	Variables map[string]interface{}
+}
+
+func NewScope(parent *Scope) *Scope {
+	return &Scope{
+		Parent:    parent,
+		Variables: make(map[string]interface{}),
+	}
+}
+
+func (s *Scope) Set(name string, value interface{}) {
+	s.Variables[name] = value
+}
+
+func (s *Scope) Get(name string) (interface{}, bool) {
+	val, ok := s.Variables[name]
+	if ok {
+		return val, true
+	}
+	if s.Parent != nil {
+		return s.Parent.Get(name)
+	}
+	return nil, false
+}
+
 // VariableTable is the variable table
-var VariableTable = make(map[string]interface{})
+var VariableTable = NewScope(nil)
+
+/*------------------------------------------------------------*/
 
 // Represents a compiled function in a lambda
 type op struct {
@@ -489,18 +536,49 @@ var step bool = false
 // The currently active function - used for error messages
 var activeFunction op
 
+/*------------------------------------------------------------*/
+
 // Eval evaluates a GoForth program
 func Eval(funcs []op) {
 	for _, f := range funcs {
 		oldFunc := activeFunction
 		activeFunction = f
 		if step {
-			fmt.Printf(">>>>>> Next func is '%s' input stack is:\n", f.tok.Name)
+			codeline, pos := activeFunction.tok.GetCodeLine()
+			if codeline != "" {
+				fmt.Printf(colorYellow+">> %s\n"+colorReset, codeline)
+				padding := ">>"
+				for pos > 0 {
+					padding += " "
+					pos--
+				}
+				padding += "^\n"
+				fmt.Printf(colorYellow+"%s"+colorReset, padding)
+			} else {
+				fmt.Printf(">>>>>> Next func is '%s' input stack is:\n", f.tok.Name)
+			}
 			ValueStack.Print()
 			fmt.Print("step> ")
 			cmd, _ := ReadLn()
-			if strings.TrimSpace(cmd) == "q" {
-				step = false
+			cmd = strings.TrimSpace(cmd)
+			if len(cmd) > 0 {
+				if cmd == "?" {
+					fmt.Printf("Cmds: q - quit stepping, x - quit execution, @name - lookup variable <name>.")
+				} else if cmd == "q" {
+					step = false
+				} else if cmd == "x" {
+					step = false
+					loop = false
+					break
+				} else if cmd[0] == '@' {
+					key := strings.TrimSpace(string(cmd[1:]))
+					val, ok := VariableTable.Get(key)
+					if ok {
+						fmt.Printf("%v\n", val)
+					} else {
+						fmt.Printf("Variable '%s' does not exist\n", key)
+					}
+				}
 			}
 		}
 
@@ -511,6 +589,8 @@ func Eval(funcs []op) {
 		}
 	}
 }
+
+/*------------------------------------------------------------*/
 
 // Load and evaluate a script file
 func LoadFile(fileToRun string) {
@@ -528,7 +608,7 @@ func LoadFile(fileToRun string) {
 		return
 	}
 	fields := ParseLine(string(text))
-	_, body := Compile(fields, 0, "")
+	_, body := Compile(fields, 0, "", nil)
 	CallStack.Push(Token{File: fileToRun, Name: fileToRun, Line: 1, Offset: 0})
 	Eval(body)
 	CallStack.Pop("scriptExit")
@@ -536,6 +616,7 @@ func LoadFile(fileToRun string) {
 	currentFile = oldFile
 }
 
+/*------------------------------------------------------------*/
 //
 // Function to dynamically dispatch a function. The function argument
 // can be a op, a func() or a string nameing a function or script.
@@ -555,7 +636,7 @@ func InvokeDynamic(fn interface{}, tok Token) {
 		name = fmt.Sprint(fn)
 	}
 
-	val, in := VariableTable[name]
+	val, in := VariableTable.Get(name)
 	if in {
 		switch fn := val.(type) {
 		case op:
@@ -584,6 +665,7 @@ func InvokeDynamic(fn interface{}, tok Token) {
 	LoadFile(name)
 }
 
+/*------------------------------------------------------------*/
 //
 // GfError handles GoForth errors using the value of the activeFunction variable for source context.
 //
@@ -603,16 +685,30 @@ func GfError(str string, a ...interface{}) {
 		fmt.Printf(colorRed+"%s"+colorReset, padding)
 	}
 	if CallStack.index > 0 {
+		prevline := ""
+		count := 0
 		for i := CallStack.index - 1; i >= 0; i-- {
 			tok := CallStack.Value[i].(Token)
-			fmt.Printf("%sAt: %s:%d\tfunc: '%s'%s\n", colorRed, tok.File, tok.Line, tok.Name, colorReset)
+			line := fmt.Sprintf("%sAt: %s:%d\tfunc: '%s'%s\n", colorRed, tok.File, tok.Line, tok.Name, colorReset)
+			if line != prevline {
+				fmt.Print(line)
+				prevline = line
+				count++
+			}
+			if count > 10 {
+				fmt.Println("" + colorRed + ":\n:" + colorReset)
+				break
+			}
 		}
 	}
 	loop = false
 }
 
-// Compile a list of tokens into a lambda
-func Compile(fields []Token, start int, term string) (int, []op) {
+/*------------------------------------------------------------*/
+//
+// Compile a list of tokens into an executable 'op' array.
+//
+func Compile(fields []Token, start int, term string, parentLocals []string) (int, []op) {
 
 	var result = make([]op, 0, len(fields))
 	var funcName string
@@ -624,6 +720,8 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 
 		if f.Name == "def" || f.Name == "DEFINE" {
 			// Defining a function
+			var argList []string
+			var locals []string
 
 			index++
 			if index >= len(fields) {
@@ -633,22 +731,52 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 			}
 
 			funcName = fields[index].Name
-
 			index++
+
+			// Loop gathering arguments until we hit '=' or '==' or ':'
+			for index <= len(fields) && !(fields[index].Name == "=" || fields[index].Name == "==" || fields[index].Name == ":") {
+				argList = append(argList, fields[index].Name)
+				index++
+			}
+
+			// If it's a ':' gather locals up to '==' or '='
+			if index <= len(fields) && fields[index].Name == ":" {
+				index++
+				for index <= len(fields) && !(fields[index].Name == "=" || fields[index].Name == "==") {
+					//BUGBUGBUG - check for additional ':'s and error out if there is one.
+					locals = append(locals, fields[index].Name)
+					index++
+				}
+			}
+
+			// The token at this point should be either '=' or '=='
 			if index >= len(fields) && !(fields[index].Name == "=" || fields[index].Name == "==") {
 				activeFunction = op{fn: nil, tok: f}
 				GfError("missing '==' in function definition; syntax is: DEFINE <name> == ... ;")
 				return 0, nil
 			}
 
-			// Local vars that get captured in the closure
+			// Implementation vars that get captured in the closure
 			var bodyPtr *[]op
 			var defToken = fields[index-1]
 
 			ops[funcName] = func() {
+				VariableTable = NewScope(VariableTable)
+
+				for i := len(argList) - 1; i >= 0; i-- {
+					varname := argList[i]
+					VariableTable.Set(varname, ValueStack.Pop("arg:"+varname))
+				}
+
+				for i := len(locals) - 1; i >= 0; i-- {
+					varname := locals[i]
+					VariableTable.Set(varname, nil)
+				}
+
 				CallStack.Push(defToken)
 				Eval(*bodyPtr)
 				CallStack.Pop("funcExit")
+				VariableTable = VariableTable.Parent
 			}
 
 			index++
@@ -659,7 +787,14 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 				return 0, nil
 			}
 
-			offset, body := Compile(fields, index, ";")
+			parentLocals = []string{}
+			for _, v := range argList {
+				parentLocals = append(parentLocals, v)
+			}
+			for _, v := range locals {
+				parentLocals = append(parentLocals, v)
+			}
+			offset, body := Compile(fields, index, ";", parentLocals)
 			bodyPtr = &body
 
 			index = offset
@@ -667,7 +802,7 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 		}
 
 		if f.Name == "{" {
-			offset, body := Compile(fields, index+1, "}")
+			offset, body := Compile(fields, index+1, "}", parentLocals)
 			bodyPtr := &body
 			wrapper := op{fn: func() { Eval(*bodyPtr) }, tok: f}
 			result = append(result, op{fn: func() { ValueStack.Push(wrapper) }, tok: f})
@@ -682,7 +817,7 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 		isFloat, _ := regexp.MatchString("^-?[0-9]+\\.[0-9]+(e-?[0-9]+)?$", f.Name)
 		isNumber, _ := regexp.MatchString("^-?[0-9,_]+$", f.Name)
 		isString := f.Name[0] == '"'
-		isVarSet, _ := regexp.MatchString("^\\![^ ]+$", f.Name)
+		isVarSet, _ := regexp.MatchString("^\\![^ =][^ ]*$", f.Name)
 		isVarGet, _ := regexp.MatchString("^[@$][^ ]+$", f.Name)
 		isFuncCall, _ := regexp.MatchString("^\\&[^ ]+$", f.Name)
 		isRegex := len(f.Name) > 1 && f.Name[0] == 'r' && f.Name[1] == '/'
@@ -704,12 +839,12 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 		} else if isVarSet {
 			str := string(f.Name[1:])
 			result = append(result, op{fn: (func() {
-				VariableTable[str] = ValueStack.Pop("valueToStore")
+				VariableTable.Set(str, ValueStack.Pop("valueToStore"))
 			}), tok: f})
 		} else if isVarGet {
 			str := string(f.Name[1:])
 			result = append(result, op{fn: (func() {
-				val, in := VariableTable[str]
+				val, in := VariableTable.Get(str)
 				if !in {
 					val, in := ops[str]
 					if in {
@@ -757,12 +892,13 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 				return 0, nil
 			}
 			varName := fields[index].Name
+			parentLocals = append(parentLocals, varName)
 			result = append(result, op{fn: func() {
 				val := ValueStack.Pop("valueToStore")
 				if !loop {
 					return
 				}
-				VariableTable[varName] = val
+				VariableTable.Set(varName, val)
 			}, tok: f})
 		} else if f.Name == "IMPORT" {
 			index++
@@ -775,18 +911,46 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 			LoadFile(fileName)
 
 		} else {
-			fn, exists := ops[f.Name]
-			if !exists {
-				activeFunction = op{fn: nil, tok: f}
-				GfError("Undefined function '%s'", f.Name)
+			vname := ""
+			if parentLocals != nil {
+				for _, v := range parentLocals {
+					if v == f.Name {
+						vname = v
+						break
+					}
+				}
+			}
+
+			if vname != "" {
+				str := vname
+				result = append(result, op{fn: (func() {
+					val, in := VariableTable.Get(str)
+					if !in {
+						val, in := ops[str]
+						if in {
+							ValueStack.Push(val)
+						} else {
+							activeFunction = op{fn: nil, tok: f}
+							GfError("variable '%s' doesn't exist.", f.Name)
+						}
+					} else {
+						ValueStack.Push(val)
+					}
+				}), tok: f})
 			} else {
-				switch fn := fn.(type) {
-				case op:
-					result = append(result, fn)
-				case func():
-					result = append(result, op{fn: fn, tok: f})
-				default:
-					GfError("compiling '%s': expected func(), not %t", f.Name, fn)
+				fn, exists := ops[f.Name]
+				if !exists {
+					activeFunction = op{fn: nil, tok: f}
+					GfError("Undefined function '%s'", f.Name)
+				} else {
+					switch fn := fn.(type) {
+					case op:
+						result = append(result, fn)
+					case func():
+						result = append(result, op{fn: fn, tok: f})
+					default:
+						GfError("compiling '%s': expected func(), not %t", f.Name, fn)
+					}
 				}
 			}
 		}
@@ -796,6 +960,7 @@ func Compile(fields []Token, start int, term string) (int, []op) {
 	return index, result
 }
 
+/*------------------------------------------------------------*/
 // Compare two items polymorphically
 func Compare(v1 interface{}, v2 interface{}) int {
 	if v1 == nil {
@@ -1027,6 +1192,8 @@ func binRecHelper(val interface{}, ifProg, thenProg, recProg, endProg func()) {
 
 func main() {
 
+	//C Causes subsequent functions to be stepped i.e. run one a time with the
+	//C current state of the stack displayed.
 	ops["step"] = func() {
 		step = true
 	}
@@ -1040,6 +1207,7 @@ func main() {
 		ValueStack.Push(Compare(v1, v2))
 	}
 
+	//C Polymorphic function that compares two values of any type for equality.
 	ops["=="] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1049,6 +1217,7 @@ func main() {
 		ValueStack.Push(Compare(v1, v2) == 0)
 	}
 
+	//C Polymorphic function that compares two values of any type for inequality.
 	ops["!="] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1058,6 +1227,7 @@ func main() {
 		ValueStack.Push(Compare(v1, v2) != 0)
 	}
 
+	//C Returns true if the first value is less than the second.
 	ops[">"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1067,6 +1237,7 @@ func main() {
 		ValueStack.Push(Compare(v1, v2) > 0)
 	}
 
+	//C Returns true if the first value is greater than or equal to the second.
 	ops[">="] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1076,6 +1247,7 @@ func main() {
 		ValueStack.Push(Compare(v1, v2) >= 0)
 	}
 
+	//C Returns true if the first value is greater than the second.
 	ops["<"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1085,6 +1257,7 @@ func main() {
 		ValueStack.Push(Compare(v1, v2) < 0)
 	}
 
+	//C Returns true if the first value is less than or equal to the second.
 	ops["<="] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1094,6 +1267,9 @@ func main() {
 		ValueStack.Push(Compare(v1, v2) <= 0)
 	}
 
+	//C true false and -> false
+	//C true true and -> true
+	//C Logical 'and' of two values.
 	ops["and"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1103,6 +1279,9 @@ func main() {
 		ValueStack.Push(isTrue(v1) && isTrue(v2))
 	}
 
+	//C true false or -> true
+	//C false false or -> false
+	//C Logical 'or' of two values.
 	ops["or"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1112,6 +1291,7 @@ func main() {
 		ValueStack.Push(isTrue(v1) || isTrue(v2))
 	}
 
+	//C Returns the keys in a dictionary as a list.
 	ops["keys"] = func() {
 		val := ValueStack.Pop("dictionary")
 		if !loop {
@@ -1135,6 +1315,7 @@ func main() {
 		}
 	}
 
+	//C Prints out the list of available functions.
 	ops["help"] = func() {
 		count := 0
 
@@ -1150,6 +1331,9 @@ func main() {
 		fmt.Println()
 	}
 
+	//C 5 {@_} repeat -> 1 2 3 4 5
+	//C Repeats a prog <N> times. The value of N is available in the block as @_.
+	//C The results of each execution of the prog (if any) are pushed onto the stack.
 	ops["repeat"] = func() {
 		val := ValueStack.Pop("program")
 		if !loop {
@@ -1178,19 +1362,23 @@ func main() {
 			return
 		}
 
-		oldval, ok := VariableTable["_"]
+		oldval, ok := VariableTable.Get("_")
 		for i := 0; i < itercount; i++ {
 			if !loop {
 				break
 			}
-			VariableTable["_"] = i // BUGBUGBUG - do we really want to do this?
+			VariableTable.Set("_", i) // BUGBUGBUG - do we really want to do this?
 			body()
 		}
 		if ok {
-			VariableTable["_"] = oldval
+			VariableTable.Set("_", oldval)
 		}
 	}
 
+	//C <val> {<prog1>} {<prog2>} ifte -> <resultOfProg>
+	//C The 'ifte' function (if-then-else) takes a value and two progs.
+	//C If the value is true, then the first prog is executed. If it's
+	//C false, then the second prog is executed.
 	ops["if"] = func() {
 		val := ValueStack.Pop("condVal")
 		if !loop {
@@ -1216,6 +1404,10 @@ func main() {
 		}
 	}
 
+	//C <val> {<prog>} if -> <resultOfProg>
+	//C The 'if' function takes a value and a prog. If the value is true,
+	//C then the first prog is executed. If it's false, then the second \
+	//C prog is executed.
 	ops["ifte"] = func() {
 		elsePartVal := ValueStack.Pop("elsePart")
 		ifPartVal := ValueStack.Pop("thenPart")
@@ -1251,6 +1443,12 @@ func main() {
 		}
 	}
 
+	//C <val> [<pat1> <action1> <pat2> <action2> ...] case
+	//C The case function takes a list of pattern/action pairs.
+	//C Patterns can be progs, regular expressoins or literals. If
+	//C a pattern matches, then the corresponding prog is executed
+	//C which may or may not leave a value on the stack.
+	//C Example:  2 [1 "one" 2 "two" 3 "three"] case -> "two"
 	ops["case"] = func() {
 		pattern := ValueStack.Pop("pattern")
 		val := ValueStack.Pop("valToMatch")
@@ -1359,16 +1557,19 @@ func main() {
 		}
 	}
 
+	//C Pushes 'true' on the stack
 	ops["true"] = func() { ValueStack.Push(true) }
 
-	// replaces the TOS with true
+	//C Replaces the top-of-stack with 'true'
 	ops["true!"] = func() { ValueStack.Value[ValueStack.index-1] = true }
 
+	//C Pushes 'false' on the stack
 	ops["false"] = func() { ValueStack.Push(false) }
 
-	// replaces the TOS with false
-	ops["true!"] = func() { ValueStack.Value[ValueStack.index-1] = false }
+	//C Replaces the top-of-stack with 'true'
+	ops["false!"] = func() { ValueStack.Value[ValueStack.index-1] = false }
 
+	//C Replaces the top-of-stack with the type of that value.
 	ops["type"] = func() {
 		val := ValueStack.Pop("valToGetTypeOf")
 		if !loop {
@@ -1377,39 +1578,49 @@ func main() {
 		ValueStack.Push(reflect.TypeOf(val))
 	}
 
+	//C Pushes the type 'int' on the top of stack. See also 'is'.
 	ops["^int"] = func() {
 		ValueStack.Push(reflect.TypeOf(1))
 	}
 
+	//C Pushes the type 'float' (float64) on the top of stack. See also 'is'.
 	ops["^float"] = func() {
 		ValueStack.Push(reflect.TypeOf(1.0))
 	}
 
+	//C Pushes the type 'string' on the top of stack. See also 'is'.
 	ops["^string"] = func() {
 		ValueStack.Push(reflect.TypeOf(""))
 	}
 
+	//C Pushes the type 'func()' on the top of stack. See also 'is'.
 	ops["^lambda"] = func() {
 		ValueStack.Push(reflect.TypeOf(func() {}))
 	}
 
+	//C Pushes the type 'list' ([]interface{}) on the top of stack. See also 'is'.
 	ops["^list"] = func() {
 		ValueStack.Push(listType)
 	}
 
+	//C Pushes the type 'bool' on the top of stack. See also 'is'.
 	ops["^bool"] = func() {
 		ValueStack.Push(reflect.TypeOf(true))
 	}
 
+	//C Pushes the type 'byte' on the top of stack. See also 'is'.
 	ops["^byte"] = (func() {
 		ValueStack.Push(reflect.TypeOf("a"[0]))
 	})
 
+	//C Pushes the type 'type' on the top of stack. See also 'is'.
 	ops["^type"] = func() {
 		// Having to do this is crazy...
 		ValueStack.Push(reflect.TypeOf(reflect.TypeOf(1)))
 	}
 
+	//C <val> <type> is -> <bool>
+	//C The 'is' function checks to see in <val> is of type <type>
 	ops["is"] = func() {
 		v2 := ValueStack.Pop("targetType")
 		v1 := ValueStack.Pop("value")
@@ -1425,6 +1636,9 @@ func main() {
 		}
 	}
 
+	//C Indirect execution (apply) for a prog, function or script.
+	//C Example:  2 3 {+} & -> 5
+	//C           "foo" -> ... # execute the function or script named by "foo".
 	ops["&"] = func() {
 		val := ValueStack.Pop("programToinvoke")
 		if !loop {
@@ -1434,6 +1648,8 @@ func main() {
 		InvokeDynamic(val, activeFunction.tok)
 	}
 
+	//C 2 3 {2 *} apply2 -> 4 6
+	//C The 'apply2' function takes a prog and applies it to the top 2 elements on the stack.
 	ops["apply2"] = func() {
 		fnval := ValueStack.Pop("programToinvoke")
 		if !loop {
@@ -1456,6 +1672,8 @@ func main() {
 		fn()
 	}
 
+	//C 1 2 3 {2 *} apply3 -> 2 4 6
+	//C The 'apply3' function takes a prog and applies it to the top 3 elements on the stack.
 	ops["apply3"] = func() {
 		fnval := ValueStack.Pop("programToinvoke")
 		if !loop {
@@ -1512,6 +1730,8 @@ func main() {
 		ValueStack.Push(result)
 	}
 
+	//C <X> <y> over -> <x> <y> <x>
+	//C The 'over' function copies the second item on the stack to the top of stack.
 	ops["over"] = func() {
 		if ValueStack.index > 1 {
 			ValueStack.Push(ValueStack.Value[ValueStack.index-2])
@@ -1520,10 +1740,13 @@ func main() {
 		}
 	}
 
+	//C Indicates the start of a list 'literal'
 	ops["["] = func() {
 		OffsetStack.Push(ValueStack.index)
 	}
 
+	//C Takes the values on the stack starting at the location marked by '['
+	//C through to the TOS and makes a list out of them.
 	ops["]"] = func() {
 
 		startIndex := OffsetStack.Pop("offsetOfStartOfList").(int)
@@ -1548,12 +1771,18 @@ func main() {
 		ValueStack.Push(arr)
 	}
 
+	//C <x> <y> + -> <x+y>
+	//C The '+' function takes the top two values on the stack and adds them.
+	//C If the values are numbers, then simple addition is used. If the values
+	//C If the first value is a string, then string concatenation is used.
+	//C If the first value is a list then the second value is added to the end of the list.
 	ops["+"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
 		if !loop {
 			return
 		}
+
 		switch x := v1.(type) {
 		case float64:
 			switch y := v2.(type) {
@@ -1581,7 +1810,7 @@ func main() {
 				}
 				ValueStack.Push(x + ival)
 			case float64:
-				ValueStack.Push(x + int(y))
+				ValueStack.Push(float64(x) + y)
 			}
 		case string:
 			switch y := v2.(type) {
@@ -1595,6 +1824,62 @@ func main() {
 		}
 	}
 
+	//C Get the successor value for the argument. If v is a number then the result us
+	//C v+1. If v is a string or list, its the value puts an empty element on the end.
+	ops["succ"] = func() {
+		v1 := ValueStack.Tos()
+		if !loop {
+			return
+		}
+
+		switch x := v1.(type) {
+		case float64:
+			ValueStack.SetTos(x + 1.0)
+		case int:
+			ValueStack.SetTos(x + 1)
+		case string:
+			ValueStack.SetTos(x + " ")
+		case []interface{}:
+			ValueStack.SetTos(append(x, nil))
+		default:
+			GfError("Can't compute the successor of '%v'", x)
+		}
+	}
+
+	//C Get the predecessor value of the argument.
+	//C 10 pred -> 9
+	//C 10.0 pred -> 9.0
+	//C "abcde" pred -> "bcde"
+	ops["pred"] = func() {
+		v1 := ValueStack.Pop("valToDecrement")
+		if !loop {
+			return
+		}
+
+		switch x := v1.(type) {
+		case float64:
+			ValueStack.Push(x - 1.0)
+		case int:
+			ValueStack.Push(x - 1)
+		case string:
+			if len(x) > 1 {
+				ValueStack.Push(string(x[1:]))
+			} else {
+				ValueStack.Push(x)
+			}
+		case []interface{}:
+			if len(x) > 1 {
+				ValueStack.Push(x[1:])
+			} else {
+				ValueStack.Push(x)
+			}
+		default:
+			GfError("Can't compute the predecessor of '%v'", x)
+		}
+	}
+
+	//C [1 2 3 4] uncons -> 1 [2 3 4]
+	//C 'uncons' splits a list into its head and tail values.
 	ops["uncons"] = func() {
 		vect := ValueStack.Pop("vector")
 		if !loop {
@@ -1621,6 +1906,10 @@ func main() {
 		}
 	}
 
+	//C [1 2 3] [4 5 6] append -> [1 2 3 4 5 6]
+	//C The 'append' functiono conccatenates two lists. Contrast this with '+'
+	//C where the second argument would become the last value in the list i.e.
+	//C [1 2 3] [4 5 6] + -> [1 2 3 [4 5 6]]
 	ops["append"] = func() {
 		v2 := ValueStack.Pop("list2")
 		v1 := ValueStack.Pop("list1")
@@ -1652,6 +1941,9 @@ func main() {
 		}
 	}
 
+	//C 1 [2 3 4] cons -> [1 2 3 4]
+	//C Adds the second element on the stack to the front of the list. 'cons' is
+	//C the dual of 'uncons'
 	ops["cons"] = func() {
 		v2 := ValueStack.Pop("list")
 		v1 := ValueStack.Pop("valToCons")
@@ -1669,6 +1961,14 @@ func main() {
 		}
 	}
 
+	//C <list> {<prog>} split -> <resultList1 resultList2
+	//C The 'split' function splits a list to pieces. If it is passed a prog, then
+	//C the list split base on the results of the prog applied to each element
+	//C Example: [1 2 3 4 5 6] {2 % 0 ==} list:split -> [1 3 5] [2 4 6]
+	//C Alternate use:
+	//C <list> <number> split -> <partition1> <partition2> ... <partitionN>
+	//C This function can also be used to partition a list into <number> length pieces.
+	//C Example: [1 2 3 4 5 6] 2 list:split -> [1 2] [3 4] [5 6]
 	ops["list:split"] = func() {
 		v2 := ValueStack.Pop("progOrValue")
 		v1 := ValueStack.Pop("listToSplit")
@@ -1744,6 +2044,7 @@ func main() {
 		}
 	}
 
+	//C Polymorphic function that tests to see if the stack is a truthy false.
 	ops["false?"] = func() {
 		v1 := ValueStack.Pop("valToTest")
 		if !loop {
@@ -1752,6 +2053,7 @@ func main() {
 		ValueStack.Push(isFalse(v1))
 	}
 
+	//C Polymorphic function that tests to see if the stack is a truthy true.
 	ops["true?"] = func() {
 		v1 := ValueStack.Pop("valToTest")
 		if !loop {
@@ -1760,6 +2062,9 @@ func main() {
 		ValueStack.Push(isTrue(v1))
 	}
 
+	//C <value> true! -> true
+	//C Replaces the top of with the value true. This function is equivalent to
+	//C pop true
 	ops["true!"] = func() {
 		ValueStack.Pop("valToConvert")
 		if !loop {
@@ -1768,6 +2073,12 @@ func main() {
 		ValueStack.Push(true)
 	}
 
+	//C <val> <number> * -> <multiplyResult>
+	//C The '*' function multiplies it's two arguments. It works for numbers
+	//C strings, and lists:
+	//C Example: 2 3 * -> 6
+	//C Example: "ab" 3 * -> "ababab"
+	//C Example: [1 2 3] 2 * -> [1 2 3 1 2 3]
 	ops["*"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1777,7 +2088,7 @@ func main() {
 			case int:
 				ValueStack.Push(x * y)
 			case float64:
-				ValueStack.Push(x * int(y))
+				ValueStack.Push(float64(x) * y)
 			default:
 				GfError("Cannot multiply '%s' and '%s'", v1, v2)
 			}
@@ -1817,6 +2128,12 @@ func main() {
 		}
 	}
 
+	//C <val> <number> '-' -> <difference>
+	//C The '-' (subtraction) function subtracts the second value
+	//C from the first. It works on number, strings and lists:
+	//C 5 2 - -> 3
+	//C "abcde" 2 - -> "cde"
+	//C "[1 2 3 4 5] 2 - -> [3 4 5]
 	ops["-"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1905,6 +2222,7 @@ func main() {
 		}
 	}
 
+	//C Divides two numbers. Integers and floats can be freely mixed.
 	ops["/"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1947,6 +2265,8 @@ func main() {
 		}
 	}
 
+	//C '%' computes the modulus of two numbers
+	//C Example: 10 3 % -> 1
 	ops["%"] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -1977,6 +2297,8 @@ func main() {
 		}
 	}
 
+	//C 2 6 .. -> [2 3 4 5 6]
+	//C Takes two values and generates a list from start to finish.
 	ops[".."] = func() {
 		v2 := ValueStack.Pop("operand2")
 		v1 := ValueStack.Pop("operand1")
@@ -2008,6 +2330,8 @@ func main() {
 		}
 	}
 
+	//C 2 6 2 .. -> [2 4 6]
+	//C Takes three values <start> <end> and <step> and generates a list from start to finish, incrementing by step.
 	ops["..."] = func() {
 		v3 := ValueStack.Pop("incr")
 		v2 := ValueStack.Pop("finish")
@@ -2054,10 +2378,13 @@ func main() {
 		}
 	}
 
+	//C Place a single random number on the stack
 	ops["random"] = (func() {
 		ValueStack.Push(rand.Int())
 	})
 
+	//C <numToGenerate> list:random -> <listOfRandomNumbers>
+	//C Takes 1 argument which is the number of random numbers to generate.
 	ops["list:random"] = (func() {
 		num := ValueStack.Pop("numValsToGenerate")
 		if !loop {
@@ -2075,6 +2402,8 @@ func main() {
 		ValueStack.Push(result)
 	})
 
+	//C <value> list? -> <boolean>
+	//C Returns true if the value on the top of stack is a list ([]interface{})
 	ops["list?"] = func() {
 		val := ValueStack.Pop("valToTest")
 		if !loop {
@@ -2088,6 +2417,25 @@ func main() {
 		}
 	}
 
+	//C <value> dict? -> <boolean>
+	//C Returns true if the value on the top of stack is a dictionary.
+	ops["dict?"] = func() {
+		val := ValueStack.Pop("valToTest")
+		if !loop {
+			return
+		}
+		switch val.(type) {
+		case map[interface{}]interface{}:
+			ValueStack.Push(true)
+		case map[string]interface{}:
+			ValueStack.Push(true)
+		default:
+			ValueStack.Push(false)
+		}
+	}
+
+	//C <value> string? -> <boolean>
+	//C Returns true if the value on the top of stack is a string.
 	ops["string?"] = func() {
 		val := ValueStack.Pop("valToTest")
 		if !loop {
@@ -2101,6 +2449,8 @@ func main() {
 		}
 	}
 
+	//C <value> int? -> <boolean>
+	//C Returns true if the value on the top of stack is an integer.
 	ops["int?"] = func() {
 		val := ValueStack.Pop("valToTest")
 		if !loop {
@@ -2114,6 +2464,8 @@ func main() {
 		}
 	}
 
+	//C <value> float? -> <boolean>
+	//C Returns true if the value on the top of stack is a float.
 	ops["float?"] = func() {
 		val := ValueStack.Pop("valToTest")
 		if !loop {
@@ -2127,6 +2479,8 @@ func main() {
 		}
 	}
 
+	//C <value> byte? -> <boolean>
+	//C Returns true if the value on the top of stack is a byte.
 	ops["byte?"] = func() {
 		val := ValueStack.Pop("valToTest")
 		if !loop {
@@ -2140,6 +2494,8 @@ func main() {
 		}
 	}
 
+	//C <value> number? -> <boolean>
+	//C Returns true if the value on the top of stack is a number (float or int).
 	ops["number?"] = func() {
 		val := ValueStack.Pop("valToTest")
 		if !loop {
@@ -2157,6 +2513,8 @@ func main() {
 		}
 	}
 
+	//C 1 2 3 rol -> 3 1 2
+	//C Roll the top three elements on the stack by one place
 	ops["rol"] = func() {
 		tos := ValueStack.Pop("tos")
 		v2 := ValueStack.Pop("v2")
@@ -2169,6 +2527,8 @@ func main() {
 		ValueStack.Push(v2)
 	}
 
+	//C X Y swap -> Y X
+	//C Swap the top two elements on the stack.
 	ops["swap"] = func() {
 		if ValueStack.index > 1 {
 			ValueStack.Value[ValueStack.index-2], ValueStack.Value[ValueStack.index-1] =
@@ -2178,15 +2538,18 @@ func main() {
 		}
 	}
 
+	//C 1 2 3 swapd -> 2 1 3
+	//C Swap the TOS-1 and TOS-2 elements on the stack.
 	ops["swapd"] = func() {
 		if ValueStack.index > 2 {
 			ValueStack.Value[ValueStack.index-3], ValueStack.Value[ValueStack.index-2] =
 				ValueStack.Value[ValueStack.index-2], ValueStack.Value[ValueStack.index-3]
 		} else {
-			GfError("there must be at least 2 values on the stack to 'swap' them.")
+			GfError("there must be at least 3 values on the stack to 'swap' them.")
 		}
 	}
 
+	//C Pop 1 element off the stack and discard it.
 	ops["pop"] = func() {
 		if ValueStack.index > 0 {
 			ValueStack.index--
@@ -2195,6 +2558,8 @@ func main() {
 		}
 	}
 
+	//C X Y popd -> Y
+	//C Pop the TOS-1 element off the stack and discard it.
 	ops["popd"] = func() {
 		if ValueStack.index > 1 {
 			ValueStack.Value[ValueStack.index-2] = ValueStack.Value[ValueStack.index-1]
@@ -2204,6 +2569,8 @@ func main() {
 		}
 	}
 
+	//C Returns true if the top value on the stack is small i.e. a list or string
+	//C with length less than 2, an integer or float less than 2, nil or a boolean value.
 	ops["small"] = func() {
 		index := ValueStack.index
 		if index < 1 {
@@ -2226,8 +2593,11 @@ func main() {
 		}
 	}
 
+	//C Clear the stack.
 	ops["cstk"] = func() { ValueStack.Reset() }
 
+	//C X Y dup -> X Y Y
+	//C Duplicate the top element on the stack
 	ops["dup"] = func() {
 		index := ValueStack.index
 		if index > 0 {
@@ -2238,6 +2608,8 @@ func main() {
 		}
 	}
 
+	//C 1 2 3 4 dup2 -> 1 2 3 4 3 4
+	//C Duplicate the top 2 elements on the stack.
 	ops["dup2"] = func() {
 		index := ValueStack.index
 		if index > 1 {
@@ -2289,6 +2661,7 @@ func main() {
 		prog2()
 	}
 
+	//C Pop the top value off the stack and print it.
 	ops["."] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2297,8 +2670,10 @@ func main() {
 		fmt.Println(val)
 	}
 
+	//C Non-destructively print the top 10 elements on the stack.
 	ops[".s"] = ValueStack.Print
 
+	//C Pop the top value off the stack and print it in red.
 	ops[".red"] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2307,6 +2682,7 @@ func main() {
 		fmt.Println(colorRed+fmt.Sprintf("%v", val), colorReset)
 	}
 
+	//C Pop the top value off the stack and print it in yellow.
 	ops[".yellow"] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2315,6 +2691,7 @@ func main() {
 		fmt.Println(colorYellow+fmt.Sprintf("%v", val), colorReset)
 	}
 
+	//C Pop the top value off the stack and print it in green.
 	ops[".green"] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2323,6 +2700,7 @@ func main() {
 		fmt.Println(colorGreen+fmt.Sprintf("%v", val), colorReset)
 	}
 
+	//C Pop the top value off the stack and print it in blue.
 	ops[".blue"] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2331,6 +2709,7 @@ func main() {
 		fmt.Println(colorBlue+fmt.Sprintf("%v", val), colorReset)
 	}
 
+	//C Pop the top value off the stack and print it in purple.
 	ops[".purple"] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2339,6 +2718,7 @@ func main() {
 		fmt.Println(colorPurple+fmt.Sprintf("%v", val), colorReset)
 	}
 
+	//C Pop the top value off the stack and print it in white.
 	ops[".white"] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2347,6 +2727,7 @@ func main() {
 		fmt.Println(colorWhite+fmt.Sprintf("%v", val), colorReset)
 	}
 
+	//C Pop the top value off the stack and print it in cyan.
 	ops[".cyan"] = func() {
 		val := ValueStack.Pop("valToPrint")
 		if !loop {
@@ -2355,6 +2736,7 @@ func main() {
 		fmt.Println(colorCyan+fmt.Sprintf("%v", val), colorReset)
 	}
 
+	//C Set the cursor position on the screen
 	ops["console:at"] = func() {
 		x := ValueStack.Pop("consoleX")
 		y := ValueStack.Pop("consoleY")
@@ -2365,6 +2747,8 @@ func main() {
 		fmt.Printf("\033[%d;%df", x, y)
 	}
 
+	//C X Y STR console:print ->
+	//C Print STR on the screen at (X,Y)
 	ops["console:print"] = func() {
 		str := ValueStack.Pop("strToPrint")
 		y := ValueStack.Pop("consoleY")
@@ -2373,10 +2757,11 @@ func main() {
 			return
 		}
 		// <ESC>[{ROW};{COLUMN}f
-		fmt.Printf("\033[%d;%df", x, y)
+		fmt.Printf("\033[%d;%df", y, x)
 		fmt.Print(str)
 	}
 
+	//C Print the top of stack value without adding a newline.
 	ops["print"] = func() {
 		str := ValueStack.Pop("strToPrint")
 		if !loop {
@@ -2385,6 +2770,8 @@ func main() {
 		fmt.Print(str)
 	}
 
+	//C <formatString> <argumentList> format -> <formattedString>
+	//C Returns a formatted string with appropriate substitutions from the <argumentList>
 	ops["format"] = func() {
 		val := ValueStack.Pop("argList")
 		str := ValueStack.Pop("formatString")
@@ -2410,6 +2797,7 @@ func main() {
 		ValueStack.Push(result)
 	}
 
+	//C Sleep for the specified number of milliseconds
 	ops["sleep"] = func() {
 		duration := ValueStack.Pop("duration")
 		if !loop {
@@ -2424,11 +2812,13 @@ func main() {
 		}
 	}
 
+	//C Read a character from the console
 	ops["getchar"] = func() {
 		chr, _ := ReadChar()
 		ValueStack.Push(chr)
 	}
 
+	//C Read a line from the console.
 	ops["getline"] = func() {
 		str, _ := ReadLn()
 		ValueStack.Push(str)
@@ -2456,6 +2846,10 @@ func main() {
 		}
 	}
 
+	//C <collection> <index> @ -> <elementAtIndex>
+	//C Get the value from the collection indicated by index. Works for lists
+	//C and dictionaries.
+	//C Example: [0 1 2 3 4] 2 @ -> 2
 	ops["@"] = func() {
 		idxVal := ValueStack.Pop("indexVal")
 		vect := ValueStack.Pop("vect")
@@ -2519,7 +2913,8 @@ func main() {
 	}
 
 	//C V I E !
-	// The "!" stores the element E in the Vector V at index I
+	//C The "!" function stores the element E in the Vector V at index I
+	//C Example: [1 2 3 4] 1 20 ! -> [1 20 3 4]
 	ops["!"] = func() {
 		newVal := ValueStack.Pop("newval")
 		idx := ValueStack.Pop("index")
@@ -2539,6 +2934,8 @@ func main() {
 		}
 	}
 
+	//C [1 2 3] first -> 1
+	//C Get the first element from a list or string.
 	ops["first"] = func() {
 		vect := ValueStack.Pop("list")
 		if !loop {
@@ -2565,6 +2962,8 @@ func main() {
 		}
 	}
 
+	//C [1 2 3 4] rest -> [2 3 4]
+	//C Get all but the first element of a string or list.
 	ops["rest"] = func() {
 		vect := ValueStack.Pop("list")
 		if !loop {
@@ -2585,6 +2984,8 @@ func main() {
 		}
 	}
 
+	//C [1 2 3 4 5] 2 skip -> [3 4 5]
+	//C Skip the first N elements of a list and return the remaining elements.
 	ops["skip"] = func() {
 		num := ValueStack.Pop("numToSkip")
 		vect := ValueStack.Pop("vector")
@@ -2624,6 +3025,7 @@ func main() {
 		}
 	}
 
+	//C Get the last N elements of a list or string.
 	ops["lastn"] = func() {
 		num := ValueStack.Pop("num")
 		vect := ValueStack.Pop("vector")
@@ -2663,6 +3065,7 @@ func main() {
 		}
 	}
 
+	//C Get the last element of list or string.
 	ops["last"] = func() {
 		vect := ValueStack.Pop("vector")
 		if !loop {
@@ -2679,6 +3082,7 @@ func main() {
 		}
 	}
 
+	//C Test to see if the top of stack is nil.
 	ops["nil?"] = func() {
 		val := ValueStack.Pop("valueToTest")
 		if !loop {
@@ -2687,10 +3091,12 @@ func main() {
 		ValueStack.Push(val == nil)
 	}
 
+	//C Put nil on the top of stack.
 	ops["nil"] = func() {
 		ValueStack.Push(nil)
 	}
 
+	//C Test to see if the TOS is an empty string or list.
 	ops["empty?"] = func() {
 		vect := ValueStack.Pop("valueToTest")
 		if !loop {
@@ -2718,6 +3124,7 @@ func main() {
 		}
 	}
 
+	//C Test to see if the TOS is not an empty string or list.
 	ops["notempty?"] = func() {
 		vect := ValueStack.Pop("valueToTest")
 		if !loop {
@@ -2745,6 +3152,9 @@ func main() {
 		}
 	}
 
+	//C [1 2 3] {2 *} map -> [2 4 6]
+	//C Apply the specified prog to each element in the argument list, returning
+	//C a new list of the same length.
 	ops["map"] = func() {
 		progVal := ValueStack.Pop("program")
 		vect := ValueStack.Pop("vector")
@@ -2823,7 +3233,9 @@ func main() {
 		}
 	}
 
-	// Apply a function too each list element, returning nothing
+	//C [1 2 3 4] {2 * .} each # Prints 2 4 6 8
+	//C The 'each' function apply a prog to each list element, returning nothing
+	//C See also: map, filter
 	ops["each"] = func() {
 		progVal := ValueStack.Pop("program")
 		vect := ValueStack.Pop("vector")
@@ -2930,6 +3342,8 @@ func main() {
 		}
 	}
 
+	//C Sort the objects in a list returning a new sorted list.
+	//C Example: [3 1 4 2] sort -> [1 2 3 4]
 	ops["sort"] = (func() {
 		values := ValueStack.Pop("listToSort")
 		if !loop {
@@ -2981,6 +3395,8 @@ func main() {
 		}
 	})
 
+	//C Sort the objects in a list in descending order returning a new sorted list.
+	//C Example: [3 1 4 2] dsort -> [4 3 2 1]
 	ops["dsort"] = (func() {
 		values := ValueStack.Pop("listToSort")
 		if !loop {
@@ -3051,6 +3467,13 @@ func main() {
 		}
 	}
 
+	//C val {terminalProg} {aggregateProg} primrec -> <result>
+	//C Recursive combinator that takes an initial value, a terminal value generator prog
+	//C and an aggregator prog. The combinator 'decrements' the initial value until
+	//C until the terminal value is reached then uses the aggregator prog to aggregate these
+	//C values.
+	//C Example - factorial of 10: 10 {1} {*} primrec -> <factorialOf10>
+	//C Example - filtering : 1 20 .. {[]} {first dup 2 % 0 == {append} {pop} ifte} primrec -> <filteredList>
 	ops["primrec"] = func() {
 		progVal := ValueStack.Pop("program")
 		initProgVal := ValueStack.Pop("result")
@@ -3119,6 +3542,10 @@ func main() {
 		ValueStack.Push(result)
 	}
 
+	//C <value> {ifProg} {thenProg} {recProg} {endProg} linrec -> <result>
+	//C Linear recursive combinator.
+	//C Example - factorial: 10 {2 <} {pop 1} {dup 1 -} {*} linrec
+	//C Examole - reverse list: [1 2 3] {len 2 < } {} {uncons} {swap append} linrec -> [3 2 1]
 	ops["linrec"] = (func() {
 		endProgVal := ValueStack.Pop("endProg")
 		rec1progVal := ValueStack.Pop("recProg")
@@ -3199,6 +3626,9 @@ func main() {
 		}
 	})
 
+	//C <value> {ifProg} {thenProg} {recProg} {endProg} binrec -> <result>
+	//C LinBinary recursive combinator.
+	//C Example - fibonacci sequence: 10 {2 <} {pop 1} {dup 1 - swap 2 -} {+} binrec -> 89
 	ops["binrec"] = (func() {
 		endProgVal := ValueStack.Pop("endProg")
 		rec1progVal := ValueStack.Pop("recProg")
@@ -3266,6 +3696,7 @@ func main() {
 		binRecHelper(val, ifProg, thenProg, rec1prog, endProg)
 	})
 
+	//C Force convert the value on the top of stack into a float
 	ops["float!"] = func() {
 		val := ValueStack.Pop("valToConvert")
 		if !loop {
@@ -3293,6 +3724,7 @@ func main() {
 		}
 	}
 
+	//C Force convert the value on the top of stack into an integer
 	ops["int!"] = func() {
 		val := ValueStack.Pop("valToConvert")
 		if !loop {
@@ -3320,6 +3752,7 @@ func main() {
 		}
 	}
 
+	//C Convert the value on the top of stack to a chr.
 	ops["chr!"] = (func() {
 		val := ValueStack.Pop("valToConvert")
 		if !loop {
@@ -3338,6 +3771,7 @@ func main() {
 		}
 	})
 
+	//C Join a list into a single string
 	ops["str:join"] = (func() {
 		val := ValueStack.Pop("listToJoin")
 		if !loop {
@@ -3352,10 +3786,6 @@ func main() {
 				switch v := v.(type) {
 				case string:
 					result += v
-				case int:
-					result += string(rune(v))
-				case float32:
-					result += string(rune(int(v)))
 				case []interface{}:
 					result += fmt.Sprintf("%v", v)
 				}
@@ -3368,6 +3798,7 @@ func main() {
 		}
 	})
 
+	//C Convert a string to lowercase.
 	ops["str:tolower"] = func() {
 		val := ValueStack.Pop("stringToLower")
 		if !loop {
@@ -3382,6 +3813,7 @@ func main() {
 		}
 	}
 
+	//C Convert a string to upp case
 	ops["str:toupper"] = func() {
 		val := ValueStack.Pop("stringToUpper")
 		if !loop {
@@ -3396,6 +3828,22 @@ func main() {
 		}
 	}
 
+	//C Trim spaces from the beginning and end of a string
+	ops["str:trim"] = func() {
+		val := ValueStack.Pop("stringToTrim")
+		if !loop {
+			return
+		}
+
+		switch val := val.(type) {
+		case string:
+			ValueStack.Push(strings.TrimSpace(val))
+		default:
+			ValueStack.Push(strings.TrimSpace(fmt.Sprint(val)))
+		}
+	}
+
+	//C Get the ordinal code point for a character or string.
 	ops["ord"] = (func() {
 		val := ValueStack.Pop("stringToGetOrdOf")
 		if !loop {
@@ -3415,6 +3863,7 @@ func main() {
 		}
 	})
 
+	//C The 'string!' function force convertes a value into a string.
 	ops["string!"] = func() {
 		val := ValueStack.Pop("valueToConvert")
 		if !loop {
@@ -3437,6 +3886,8 @@ func main() {
 		}
 	}
 
+	//C Explode a string of characters into a list containing the individual characters.
+	//C Example: "abcd" explode -> ["a" "b" "c" "d"]
 	ops["explode"] = func() {
 		val := ValueStack.Pop("stringToExplode")
 		if !loop {
@@ -3455,6 +3906,12 @@ func main() {
 		ValueStack.Push(result)
 	}
 
+	//C <list> <prog> reduce -> <reducedValue>
+	//C The 'reduce' function iterates over the list applying the prog to current and
+	//C next values.
+	//C Example - sum list: [1 2 3 4 5] {+} reduce -> 15
+	//C Example - max list: [3 1 5 3 4] {max} reduce -> 5
+	//C Example - factorial: DEFINE fact n == 1 n .. {*} reduce
 	ops["reduce"] = func() {
 		progVal := ValueStack.Pop("reduceProg")
 		vect := ValueStack.Pop("listToReduce")
@@ -3498,6 +3955,8 @@ func main() {
 		}
 	}
 
+	//C {condition} {body} while -> ???
+	//C The 'while' function loops executing the body prog as long as the condition prog is true.
 	ops["while"] = func() {
 		bodyExpr := ValueStack.Pop("bodyProgram")
 		condExpr := ValueStack.Pop("condProgram")
@@ -3567,6 +4026,7 @@ func main() {
 		}
 	}
 
+	//C Returns the length of a string, list or dictionary
 	ops["len"] = func() {
 		val := ValueStack.Pop("valToGetLenOf")
 		if !loop {
@@ -3586,6 +4046,7 @@ func main() {
 		}
 	}
 
+	//C Returns true if the value on the top of stack is not truthy false.
 	ops["not?"] = func() {
 		val := ValueStack.Pop("valToTest")
 		if !loop {
@@ -3607,6 +4068,9 @@ func main() {
 		}
 	}
 
+	//C Loads and executes the file named by the string on the top of stack.
+	//C The is essentially equivalent to
+	//C    "script.gf" file:read eval
 	ops["load"] = func() {
 		val := ValueStack.Pop("fileToLoad")
 		if !loop {
@@ -3622,6 +4086,7 @@ func main() {
 		}
 	}
 
+	//C Evaluates the string on the top of stack as a GoForth program.
 	ops["eval"] = func() {
 		val := ValueStack.Pop("strToEvaluate")
 		if !loop {
@@ -3638,7 +4103,7 @@ func main() {
 
 		lineno = 1
 		fields := ParseLine(string(text))
-		_, body := Compile(fields, 0, "")
+		_, body := Compile(fields, 0, "", nil)
 		CallStack.Push(Token{
 			Text:   activeFunction.tok.Text,
 			File:   activeFunction.tok.File,
@@ -3650,6 +4115,8 @@ func main() {
 		lineno = 1
 	}
 
+	//C Read the file named by the string on the TOS and place the contents
+	//C on the stack as a single string.
 	ops["file:read"] = func() {
 		val := ValueStack.Pop("fileToRead")
 		if !loop {
@@ -3669,6 +4136,8 @@ func main() {
 		}
 	}
 
+	//C Read the file named by the string on the TOS and place the contents
+	//C on the stack as a list of strings (lines).
 	ops["file:readlines"] = (func() {
 		val := ValueStack.Pop("fileToReadLinesFrom")
 		if !loop {
@@ -3708,6 +4177,42 @@ func main() {
 		}
 	})
 
+	ops["file:pwd"] = func() {
+		pwd, err := os.Getwd()
+		if err == nil {
+			ValueStack.Push(pwd)
+		} else {
+			GfError(err.Error())
+		}
+	}
+
+	ops["file:join"] = func() {
+		v2 := ValueStack.Pop("secondPart")
+		v1 := ValueStack.Pop("firstPart")
+		if !loop {
+			return
+		}
+		ValueStack.Push(fmt.Sprint(v1) + string(os.PathSeparator) + fmt.Sprint(v2))
+	}
+
+	ops["file:size"] = func() {
+		v1 := ValueStack.Pop("filePath")
+		if !loop {
+			return
+		}
+		finfo, err := os.Stat(fmt.Sprint(v1))
+		if err != nil {
+			GfError(err.Error())
+			return
+		}
+
+		ValueStack.Push(finfo.Size())
+	}
+
+	//C "filename" {prog} file:readlinesWith -> <processedLines>
+	//C Read the file named by the string on the TOS and place the contents
+	//C on the stack as a list of strings (lines) after applying the prog
+	//C argument to each line
 	ops["file:readlinesWith"] = (func() {
 		progVal := ValueStack.Pop("program")
 		val := ValueStack.Pop("fileToReadLinesFrom")
@@ -3777,6 +4282,7 @@ func main() {
 		}
 	})
 
+	//C Return the names of all of the files in the current directory as a list.
 	ops["file:files"] = (func() {
 		items, err := os.ReadDir(".")
 		if err != nil {
@@ -3928,6 +4434,9 @@ func main() {
 
 	}
 
+	//C <list> <n> take -> <list>
+	//C The take function takes the first N elements from a list or string and returns
+	//C them as a new string or list.
 	ops["take"] = (func() {
 		countVal := ValueStack.Pop("numToTake")
 		val := ValueStack.Pop("vector")
@@ -3981,6 +4490,12 @@ func main() {
 		ValueStack.Push(result)
 	})
 
+	//C <string> <regex> str:match -> <bool>
+	//C <list> <regex> str:match -> <list>
+	//C The str:match function takes a string or list and a regex used for matching.
+	//C If the argument is a string str:match returns true for a match, false otherwise.
+	//C If the argument is a list, then it returns all of the elements in the list that
+	//C match the regular expression.
 	ops["str:match"] = (func() {
 		pat := ValueStack.Pop("regexToMatch")
 		val := ValueStack.Pop("stringsToMatch")
@@ -4035,6 +4550,12 @@ func main() {
 		}
 	})
 
+	//C <string> <regex> str:notmatch -> <bool>
+	//C <list> <regex> str:notmatch -> <list>
+	//C The str:notmatch function takes a string or list and a regex used for matching.
+	//C If the argument is a string str:notmatch returns false on a match, true otherwise.
+	//C If the argument is a list, then it returns all of the elements in the list that
+	//C don't match the regular expression.
 	ops["str:notmatch"] = (func() {
 		pat := ValueStack.Pop("regexToMatch")
 		val := ValueStack.Pop("stringsToMatch")
@@ -4141,6 +4662,7 @@ func main() {
 		}
 	}
 
+	//C Turns a list into a dictionary (set) where each key is assigned true.
 	ops["set!"] = func() {
 		val := ValueStack.Pop("vector")
 		if !loop {
@@ -4161,7 +4683,8 @@ func main() {
 		ValueStack.Push(result)
 	}
 
-	// Turn the list into a counted set
+	//C Turn the list into a counted set where the value associated with each key
+	//C is the number of times the key appeared in the original list.
 	ops["cset!"] = func() {
 		val := ValueStack.Pop("vector")
 		if !loop {
@@ -4187,6 +4710,8 @@ func main() {
 		ValueStack.Push(result)
 	}
 
+	//C Turn an even-length list into a dictionary where alternating elements in the
+	//C list are turned into key/value pairs.
 	ops["dict!"] = func() {
 		val := ValueStack.Pop("vector")
 		if !loop {
@@ -4217,6 +4742,7 @@ func main() {
 		}
 	}
 
+	//C Turns the argument string into a regex object.
 	ops["regex!"] = func() {
 		val := ValueStack.Pop("valueToConvert")
 		if !loop {
@@ -4240,15 +4766,21 @@ func main() {
 		}
 	}
 
+	//C Puts the function table on the stack.
 	ops["ops"] = func() {
 		ValueStack.Push(ops)
 	}
 
+	//C Puts the current variable table on the stack.
 	ops["vars"] = func() {
-		ValueStack.Push(VariableTable)
+		ValueStack.Push(VariableTable.Variables)
 	}
 
-	ops["shell"] = func() {
+	//C ["ls" "-l"] shell -> <outputFromLs>
+	//C The shell function takes a list of command name and arguments,
+	//C executes the command with the supplied arguments then returns the
+	//C result of the command as a string.
+	ops["os:shell"] = func() {
 		cmdToRun := ValueStack.Pop("cmdToRun")
 		if !loop {
 			return
@@ -4283,63 +4815,44 @@ func main() {
 		}
 	}
 
+	ops["os:start"] = func() {
+		cmdToRun := ValueStack.Pop("cmdToRun")
+		if !loop {
+			return
+		}
+
+		switch cmdToRun := cmdToRun.(type) {
+		case string:
+			cmd := exec.Command(cmdToRun)
+			err := cmd.Start()
+			if err != nil {
+				GfError("error starting command '%s': %s", cmd, err)
+			}
+		case []interface{}:
+			argVector := make([]string, 0)
+			var cmdName string = ""
+			for _, element := range cmdToRun {
+				if cmdName == "" {
+					cmdName = fmt.Sprintf("%v", element)
+				} else {
+					argVector = append(argVector, fmt.Sprintf("%v", element))
+				}
+			}
+			cmd := exec.Command(cmdName, argVector...)
+			err := cmd.Start()
+			if err != nil {
+				GfError("error starting command '%s': %s", cmdName, err)
+			}
+		default:
+			GfError("this command requires either the name of a command to run or a command vector")
+		}
+	}
+
 	LoadFile("prelude.gf")
 
+	// The main REPL...
 	if len(os.Args) == 1 {
 		fmt.Println(colorGreen+"Welcome to Go Forth | pid: ", os.Getpid())
-
-		/* Need to extract this and turn it into real tests.
-
-		fmt.Println("minus one  test")
-		_, tbody := Compile(ParseLine(`
-			"script.gf" file:read r/\n/ str:split r/^def/ str:match .
-		`), 0, "")
-		Eval(tbody)
-
-		fmt.Println("zero test")
-		_, tbody = Compile(ParseLine(`
-			"2" [
-					1 {drop "one" .red "one"}
-					r/2/ {drop "two" .blue "two"}
-					3 {drop "three" .green "three"}
-				] case .
-		`), 0, "")
-		Eval(tbody)
-
-		fmt.Println("first test")
-		_, tbody = Compile(ParseLine(`[1 2 3 4 5] {+} reduce .green`), 0, "")
-		Eval(tbody)
-
-		fmt.Println("secord test")
-		_, tbody = Compile(ParseLine("[1 2] [3 4 5] + .green"), 0, "")
-		Eval(tbody)
-
-		fmt.Println("third test")
-		_, tbody = Compile(ParseLine(" 2 3 4 + * typeof .red"), 0, "")
-		Eval(tbody)
-
-		fmt.Println("fourth test")
-		_, tbody = Compile(ParseLine("\"script.gf\" load"), 0, "")
-		Eval(tbody)
-
-		fmt.Println("fifth test")
-		_, tbody = Compile(ParseLine("5 1 {*} primrec ."), 0, "")
-		Eval(tbody)
-
-		fmt.Println("sixth test")
-		_, tbody = Compile(ParseLine("[1 2 3 4 5] [] {first swap append} primrec ."), 0, "")
-		Eval(tbody)
-
-		fmt.Println("seventh test")
-		_, tbody = Compile(ParseLine("\"abcdefghi\" \"\" {first swap +} primrec ."), 0, "")
-		Eval(tbody)
-
-		fmt.Println("eighth test")
-		_, tbody = Compile(ParseLine("10 1 {*} primrec ."), 0, "")
-		Eval(tbody)
-
-		*/
-
 		ct := time.Now()
 		for !quit {
 			loop = true
@@ -4356,7 +4869,7 @@ func main() {
 					break
 				}
 				fields := ParseLine(line)
-				_, body := Compile(fields, 0, "")
+				_, body := Compile(fields, 0, "", nil)
 				ct = time.Now()
 				Eval(body)
 			}
