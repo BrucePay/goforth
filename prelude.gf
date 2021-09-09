@@ -131,6 +131,28 @@ DEFINE reverse ==
 
 ############################################################
 #
+# Iterative list reversal
+#
+DEFINE ireverse lst : x x1 y y1 ==
+    # initialize the start and end indexes
+    0 -> x
+    lst len pred -> y
+    # while x is < y loop...
+    {x y <}
+    {
+        lst x @             # get the start index value
+        lst y @             # get the end index value
+        lst swap x swap !   # store the values reversed
+        lst swap y swap !
+        x succ -> x         # increment the indexes
+        y pred -> y
+    }
+    while
+    lst                 # return the updated list
+;
+
+############################################################
+#
 # Function to cause a runtime error
 #
 DEFINE boom ==

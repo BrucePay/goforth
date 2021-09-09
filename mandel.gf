@@ -42,9 +42,8 @@ MaxImaginary minImaginary - screenY  1.0 - / -> imaginaryFactor
   ansi:white
 ] -> color_map
 
-ansi:black -> lastcolor
-0          -> color_index
-color_map color_index @ -> color
+ansi:black    -> lastcolor
+color_map 0 @ -> color
 
 cls
 

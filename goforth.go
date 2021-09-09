@@ -3627,8 +3627,9 @@ func main() {
 	})
 
 	//C <value> {ifProg} {thenProg} {recProg} {endProg} binrec -> <result>
-	//C LinBinary recursive combinator.
-	//C Example - fibonacci sequence: 10 {2 <} {pop 1} {dup 1 - swap 2 -} {+} binrec -> 89
+	//C Binary recursive combinator (see also 'linrec')
+	//C Example - fibonacci sequence:
+	//C     10 {2 <} {pop 1} {dup 1 - swap 2 -} {+} binrec -> 89
 	ops["binrec"] = (func() {
 		endProgVal := ValueStack.Pop("endProg")
 		rec1progVal := ValueStack.Pop("recProg")
