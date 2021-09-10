@@ -4,12 +4,13 @@
 #
 ######################################################################################
 
-DEFINE node:new : this ==
-    [] dict! -> this
-    this swap :right swap ! 
-    this swap :left swap ! 
-    this swap :value swap !
-    this
+DEFINE node:new value left right ==
+    [
+        :value value
+        :left left
+        :right right
+    ]
+    dict!
 ;
 
 DEFINE node:print n ==

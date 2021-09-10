@@ -156,14 +156,13 @@ cr
 
 ############################################################
 #
-# List of nominal functions
+# List of nominal functions in the go source file
 #
 "List of nominal functions defined in goforth.go..." .blue
-"goforth.go" file:read
-    r/[\r\n]+/ str:split
-        r/^ *func / str:match
-            r/^func (\([^\)]*\))? *([^ ]+)\(.*$/ "$2" str:replace
-                {.yellow} each
+"goforth.go" file:readlines
+    r/^ *func / str:match
+        r/^func (\([^\)]*\))? *([^ ]+)\(.*$/ "$2" str:replace
+            {.yellow} each
 cr
 
 "All Done - Bye!" .green

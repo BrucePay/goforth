@@ -84,24 +84,24 @@ DEFINE zip l1 l2 prog : r x y result ==
 
 ############################################################
 #
-# DEFINE a function to recursively reverse a list
+# List reversal using 'linrec'
+#
+DEFINE reverse ==
+    {small}         # if the arg list is small
+    {}              # just return it
+    {uncons}        # otherwise uncons and recurse
+    {swap append}   # join everything back up again
+    linrec
+;
+
+############################################################
+#
+# A function to recursively reverse a list
 #
 DEFINE rreverse ==
     uncons dup empty?
     {pop [] swap +}
     {rreverse swap +}
-    ifte
-;
-
-############################################################
-#
-# Using uncons to simplify reverse
-#
-DEFINE rreverse2 ==
-    uncons
-    dup empty?
-    {pop [] swap +}
-    {rreverse2 swap +}
     ifte
 ;
 
@@ -119,19 +119,7 @@ DEFINE nrev ==
 
 ############################################################
 #
-# List reversal using 'linrec'
-#
-DEFINE reverse ==
-    {small}         # if the arg list is small
-    {}              # just return it
-    {uncons}        # otherwise uncons and recurse
-    {swap append}   # join everything back up again
-    linrec
-;
-
-############################################################
-#
-# Iterative list reversal
+# Iterative in-place list reversal
 #
 DEFINE ireverse lst : x x1 y y1 ==
     # initialize the start and end indexes
