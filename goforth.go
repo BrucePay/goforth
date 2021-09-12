@@ -3787,7 +3787,7 @@ func main() {
 				switch v := v.(type) {
 				case string:
 					result += v
-				case []interface{}:
+				default:
 					result += fmt.Sprintf("%v", v)
 				}
 			}
